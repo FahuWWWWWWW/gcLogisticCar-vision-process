@@ -1,0 +1,28 @@
+colors:
+  blue_cube:
+    lower:
+    - 0
+    - 136
+    - 0
+    upper:
+    - 255
+    - 255
+    - 127
+  green_cube:
+    lower:
+    - 93
+    - 36
+    - 0
+    upper:
+    - 255
+    - 109
+    - 255
+  red_cube:
+    lower:
+    - 0
+    - 167
+    - 121
+    upper:
+    - 255
+    - 206
+    - 255

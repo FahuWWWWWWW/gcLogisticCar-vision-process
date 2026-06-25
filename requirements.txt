@@ -1,0 +1,21 @@
+# 基础视觉与微信二维码支持 (WeChatQRCode 需要 contrib 包，PC调试需含GUI的版本)
+opencv-contrib-python==4.8.1.78
+numpy==1.26.4
+
+# 二维码与条形码识别
+pyzbar==0.1.9
+
+# 串口通信
+pyserial==3.5
+
+# 配置文件解析
+PyYAML==6.0.1
+
+# 稍后阶段(第二周及以后)将需要用到:
+# ultralytics==8.1.0 # YOLO目标检测
+# paddleocr>=2.7.3 # OCR识别
+# ncnn / rknn-toolkit-lite2 # 部署推理
+
+# 其他工具
+pillow==10.2.0
+matplotlib==3.8.2

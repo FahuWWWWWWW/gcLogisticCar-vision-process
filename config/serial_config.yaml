@@ -1,0 +1,7 @@
+# 串口通信配置
+port: "COM3"  # Windows 下通常为 COMx，Linux/树莓派下通常为 /dev/ttyUSB0 或 /dev/ttyACM0
+baudrate: 115200
+timeout: 0.1
+
+# 协议版本
+protocol_version: "1.0.0"
