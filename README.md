@@ -14,6 +14,16 @@
 
 ## 📦 模块状态总览
 
+### 🎯 当前开发状态 (已完成模块)
+
+1. ✅ **底层基建**：多线程无阻塞摄像头流 (`CameraStream`)、标准化日志 (`logger`)、帧率统计 (`FPSCounter`)、JSON 串口通信 (`SerialManager`)。
+2. ✅ **畸变校正 (内参标定)**：`camera_calibrator.py` (张正友棋盘格标定) + 极速查表重映射，彻底消除鱼眼畸变。
+3. ✅ **物理定位 (外参标定)**：`perspective_calibrator.py` (纯交互式鼠标四点选取) + 矩阵透视变换，实现从像素 `(u, v)` 降维打击到真实世界毫米级坐标 `(X, Y)`。
+4. ✅ **二维码读取**：无缝对接 OpenCV `WeChatQRCode` (CNN 算法)，鲁棒解码抗干扰。
+5. ✅ **颜色感知**：摒弃 HSV，全面转向 **LAB 色彩空间**，彻底实现亮度 (L) 与色彩 (A/B) 解耦，并提供 `color_extractor.py` 进行极大限度的光照抗性增强。
+6. ✅ **形状感知**：完全无需颜色的 `ring_detector.py`。基于树莓派运算极快的拓扑层级分析 (`RETR_TREE`) 和面积圆度过滤，瞬间锁定圆环孔洞。
+7. ✅ **核心状态机 (FSM)**：`main.py` 重构为完全基于事件（单片机 JSON 报文）驱动的有限状态机。只有收到指令才激活算力，待机状态 0 负担。
+
 | 模块 | 状态 | 核心技术 |
 |---|---|---|
 | `utils/camera_stream.py` | ✅ 完成 | 多线程摄像头封装，防帧阻塞 |
@@ -23,8 +33,8 @@
 | `color_detection/color_tuner.py` | ✅ 完成 | L/A/B 三通道实时动态调参 GUI |
 | `shape_detection/ring_detector.py` | ✅ 完成 | **纯拓扑检测**（无色彩依赖），RETR_TREE + 圆度 + NMS |
 | `calibration/camera_calibrator.py` | ✅ 完成 | 张正友棋盘格标定 + `remap` 查表极速去畸变 |
-| `calibration/perspective_calibrator.py` | 🚧 规划中 | 四点透视坐标映射（像素→塔吊物理坐标mm） |
-| `main.py` 整合 | 🚧 规划中 | 状态机整合所有视觉模块 |
+| `calibration/perspective_calibrator.py` | ✅ 完成 | 四点透视坐标映射（像素→塔吊物理坐标mm） |
+| `main.py` 整合 | ✅ 完成 | 状态机整合所有视觉模块 |
 
 ---
 
