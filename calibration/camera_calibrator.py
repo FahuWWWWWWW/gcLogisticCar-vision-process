@@ -84,6 +84,8 @@ class CameraCalibrator:
         # 默认使用 src=1 尝试外接摄像头，如需内置请改为 0
         camera = CameraStream(src=1, width=640, height=480).start()
         
+        import time
+        last_capture_time = 0
         count = 0
         while True:
             ret, frame = camera.read()
@@ -93,18 +95,36 @@ class CameraCalibrator:
             display = frame.copy()
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
             
-            # 实时寻找棋盘格角点
-            ret_corners, corners = cv2.findChessboardCorners(gray, self.pattern_size, None)
+            # 实时寻找棋盘格角点（切换到 OpenCV 4+ 最强力的 SB 算法：精确且极度鲁棒）
+            if hasattr(cv2, 'findChessboardCornersSB'):
+                flags = cv2.CALIB_CB_EXHAUSTIVE | cv2.CALIB_CB_ACCURACY
+                ret_corners, corners = cv2.findChessboardCornersSB(gray, self.pattern_size, flags)
+            else:
+                flags = cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE
+                ret_corners, corners = cv2.findChessboardCorners(gray, self.pattern_size, flags)
             
+            current_time = time.time()
             if ret_corners:
                 cv2.drawChessboardCorners(display, self.pattern_size, corners, ret_corners)
-                cv2.putText(display, "Corners Found! Press 's' to save", (10, 30), 
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                
+                # 自动抓拍逻辑：如果距离上次抓拍超过了 1.5 秒，自动保存，不需要人按键盘
+                if current_time - last_capture_time > 1.5:
+                    filename = os.path.join(self.save_dir, f"calib_{count:02d}.jpg")
+                    cv2.imwrite(filename, frame)
+                    print(f"-> [自动抓拍] 成功保存第 {count+1} 张: {filename}")
+                    count += 1
+                    last_capture_time = current_time
+                    
+                if current_time - last_capture_time < 0.3:
+                    cv2.putText(display, "CAPTURED!", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0, 255, 0), 3)
+                else:
+                    cv2.putText(display, "Corners Found! (Auto-capturing)", (10, 30), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             else:
                 cv2.putText(display, "Looking for chessboard...", (10, 30), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 
-            cv2.putText(display, f"Saved: {count}/15 (Press 'c' to calibrate, 'q' to quit)", 
+            cv2.putText(display, f"Saved: {count}/15 (Auto-saving, press 'c' to finish)", 
                         (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
             
             cv2.imshow("Calibration Capture", display)
@@ -112,13 +132,13 @@ class CameraCalibrator:
             
             if key == ord('s'):
                 filename = os.path.join(self.save_dir, f"calib_{count:02d}.jpg")
-                # 保存原始帧而不是画过线（红色/绿色）的帧
                 cv2.imwrite(filename, frame)
                 if ret_corners:
-                    print(f"-> [成功] 抓拍并保存 (检测到角点): {filename}")
+                    print(f"-> [手动抓拍] 成功保存 (检测到角点): {filename}")
                 else:
                     print(f"-> [警告] 强行抓拍并保存 (当前未检测到角点): {filename}")
                 count += 1
+                last_capture_time = current_time
             elif key == ord('c'):
                 # 检查实际保存的图像数量
                 actual_images = glob.glob(os.path.join(self.save_dir, "*.jpg"))
@@ -152,7 +172,12 @@ class CameraCalibrator:
             gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
             h, w = gray.shape[:2]
             
-            ret, corners = cv2.findChessboardCorners(gray, self.pattern_size, None)
+            if hasattr(cv2, 'findChessboardCornersSB'):
+                flags = cv2.CALIB_CB_EXHAUSTIVE | cv2.CALIB_CB_ACCURACY
+                ret, corners = cv2.findChessboardCornersSB(gray, self.pattern_size, flags)
+            else:
+                ret, corners = cv2.findChessboardCorners(gray, self.pattern_size, cv2.CALIB_CB_ADAPTIVE_THRESH | cv2.CALIB_CB_NORMALIZE_IMAGE)
+                
             if ret:
                 self.objpoints.append(self.objp)
                 # 对角点进行亚像素级精细调整，大幅提升标定精度
@@ -193,7 +218,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="相机内参标定程序")
     parser.add_argument("--cols", type=int, default=8, help="横向内角点个数 (默认: 8)")
-    parser.add_argument("--rows", type=int, default=5, help="纵向内角点个数 (默认: 5)")
+    parser.add_argument("--rows", type=int, default=6, help="纵向内角点个数 (默认: 6)")
     parser.add_argument("--size", type=float, default=20.0, help="方格物理边长mm (默认: 20.0)")
     args = parser.parse_args()
     

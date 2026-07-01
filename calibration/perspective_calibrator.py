@@ -74,7 +74,7 @@ class PerspectiveCalibrator:
         print("2. 请在摄像机视野中放置一个【已知物理尺寸的矩形】（如 A4 纸，或地上画好的基准框）。")
         print("3. 按键盘 'Space' 键抓拍当前清晰的一帧画面。")
         
-        camera = CameraStream(src=0, width=640, height=480).start()
+        camera = CameraStream(src=1, width=640, height=480).start()
         
         frame_to_calibrate = None
         while True:
