@@ -68,10 +68,21 @@ class CameraCalibrator:
         self.save_dir = os.path.join(os.path.dirname(__file__), "calib_images")
         os.makedirs(self.save_dir, exist_ok=True)
         
+        # 自动清空历史标定图像，防止旧样本污染标定结果
+        old_images = glob.glob(os.path.join(self.save_dir, "*.jpg"))
+        for img_p in old_images:
+            try:
+                os.remove(img_p)
+            except Exception as e:
+                print(f"[警告] 清理历史图片失败 {img_p}: {e}")
+        
     def start_capture_mode(self):
-        print("启动相机标定图像采集模式...")
+        print("\n================ 启动相机标定图像采集模式 ================")
+        print("【重要提示】请务必用鼠标点击弹出的【Calibration Capture】图像窗口使其获得焦点！")
+        print("只有在图像窗口处于激活状态时，敲击键盘 's', 'c', 'q' 键才会被程序捕获。")
+        print("========================================================\n")
         # 默认使用 src=1 尝试外接摄像头，如需内置请改为 0
-        camera = CameraStream(src=0, width=640, height=480).start()
+        camera = CameraStream(src=1, width=640, height=480).start()
         
         count = 0
         while True:
@@ -99,14 +110,22 @@ class CameraCalibrator:
             cv2.imshow("Calibration Capture", display)
             key = cv2.waitKey(1) & 0xFF
             
-            if key == ord('s') and ret_corners:
+            if key == ord('s'):
                 filename = os.path.join(self.save_dir, f"calib_{count:02d}.jpg")
-                # 保存原始帧而不是画过线的帧
+                # 保存原始帧而不是画过线（红色/绿色）的帧
                 cv2.imwrite(filename, frame)
-                print(f"-> 成功抓拍并保存: {filename}")
+                if ret_corners:
+                    print(f"-> [成功] 抓拍并保存 (检测到角点): {filename}")
+                else:
+                    print(f"-> [警告] 强行抓拍并保存 (当前未检测到角点): {filename}")
                 count += 1
             elif key == ord('c'):
-                break
+                # 检查实际保存的图像数量
+                actual_images = glob.glob(os.path.join(self.save_dir, "*.jpg"))
+                if len(actual_images) >= 10:
+                    break
+                else:
+                    print(f"-> [提示] 当前仅保存了 {len(actual_images)} 张，至少需要 10 张才能开始计算！")
             elif key == ord('q'):
                 camera.stop()
                 cv2.destroyAllWindows()
@@ -171,9 +190,14 @@ class CameraCalibrator:
 
 
 if __name__ == "__main__":
-    # 默认规格：9列6行内角点，物理方块边长 20.0 mm
-    calibrator = CameraCalibrator(cols=9, rows=6, square_size=20.0)
+    import argparse
+    parser = argparse.ArgumentParser(description="相机内参标定程序")
+    parser.add_argument("--cols", type=int, default=8, help="横向内角点个数 (默认: 8)")
+    parser.add_argument("--rows", type=int, default=5, help="纵向内角点个数 (默认: 5)")
+    parser.add_argument("--size", type=float, default=20.0, help="方格物理边长mm (默认: 20.0)")
+    args = parser.parse_args()
     
     # 流程：先开启捕捉 UI，按 c 完成捕捉后自动进入计算流程
+    calibrator = CameraCalibrator(cols=args.cols, rows=args.rows, square_size=args.size)
     if calibrator.start_capture_mode():
         calibrator.calibrate()

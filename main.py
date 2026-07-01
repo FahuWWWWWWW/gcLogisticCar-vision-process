@@ -49,8 +49,14 @@ def main():
     def on_command_received(frame):
         """当下位机发来 JSON 报文时，串口线程会自动回调此函数，将任务塞入队列"""
         frame_type = frame.get("type")
-        logger.info(f"收到下位机任务指令: {frame_type}, 参数: {frame.get('data')}")
-        task_queue.put(frame)
+        
+        # 仅放行视觉状态机真正关心的指令，过滤掉 POSE/STATUS 等高频上报，防止阻塞队列
+        if frame_type in ["QR_READ", "FIND_BLOCK", "FIND_RING"]:
+            logger.info(f"收到下位机任务指令: {frame_type}, 参数: {frame.get('data')}")
+            task_queue.put(frame)
+        else:
+            # 忽略未知或非视觉任务报文，防止塞满数据流水线
+            pass
         
     sm.register_callback("ALL", on_command_received)
     
@@ -159,7 +165,7 @@ def main():
                         
             cv2.imshow("gcLogisticCar - Main FSM", display)
             
-            # --- 5. 键盘独立调试模式 ---
+            # --- 5. 键盘独立调试模式与通信打桩测试 ---
             key = cv2.waitKey(1) & 0xFF
             if key == ord('q'):
                 break
@@ -172,6 +178,18 @@ def main():
             elif key == ord('3'):
                 logger.info(">> 键盘调试：下发找圆环任务")
                 task_queue.put({"type": "FIND_RING", "data": {}})
+            elif key == ord('4'):
+                logger.info(">> 打桩测试：模拟下发机械臂微调 (ARM_CTRL)")
+                if sm.is_connected:
+                    sm.send_frame("ARM_CTRL", {"cmd": "GOTO_OBSERVE", "params": 0})
+            elif key == ord('5'):
+                logger.info(">> 打桩测试：模拟下发底盘目标 (SET_TARGET)")
+                if sm.is_connected:
+                    sm.send_frame("SET_TARGET", {"x": 44, "y": 24, "zone": "qrcode"})
+            elif key == ord('6'):
+                logger.info(">> 打桩测试：模拟下发紧急停止 (EMERGENCY_STOP)")
+                if sm.is_connected:
+                    sm.send_frame("EMERGENCY_STOP", {})
 
     except KeyboardInterrupt:
         logger.info("用户中断运行。")
