@@ -1,43 +1,93 @@
-# 工程工控车视觉处理 (gcLogisticCar-vision-process)
+# gcLogisticCar-vision-process
 
-**面向2027工控挑战赛（GC_C）物流搬运赛道设计的轻量级、高鲁棒性机器视觉处理管线。**
+> **2027工程实践创新能力大赛（智能搬运赛道）— 轻量级高鲁棒性机器视觉处理管线**
+>
+> 面向树莓派 4B / RK3566 ARM 平台，全程使用经典 OpenCV 方案，拒绝推理高延迟。
 
-## 项目进度 (Project Progress)
+---
 
-本项目正处于稳步开发与算法重构阶段，当前进度详情如下：
+## 🏆 项目背景
 
-### 已完成模块 (Completed)
+本系统负责为伸缩式升降塔吊提供全视觉感知能力：识别物料颜色、定位圆环目标、解读二维码任务，并通过 USB CDC JSON 协议将物理坐标实时下发至底层运动控制器。
 
-1. **基础工具链 (`utils/`)**
-   - **`camera_stream.py`**: 多线程摄像头读取封装，极大降低了树莓派 ARM 芯片的读取延迟，防止主线程阻塞。
-   - **`serial_comm.py`**: USB CDC 底层串口通信模块。封装了 JSON 格式的高速命令收发，自带断线重连和完整性校验，用于和底层塔吊主控板对话。
-   - **`logger.py`**: 标准化日志输出。
+---
 
-2. **二维码与条码识别 (`qrcode_barcode/`)**
-   - **`qr_decoder.py`**: 基于 pyzbar 的轻量级二维码解码模块，具备自适应亮度调节以对抗反光。
+## 📦 模块状态总览
 
-3. **几何形态识别 (`shape_detection/`)**
-   - **`ring_detector.py`**: 为物流搬运特制的极速圆环检测算法。摒弃了霍夫变换，使用 OpenCV `RETR_TREE` 层级拓扑结构分析和绝对圆度公式 ($C = \frac{4\pi S}{L^2}$)。抗畸变能力强，完全无视色彩，并且内置了 NMS (非极大值抑制) 防止同心双边缘误检。
+| 模块 | 状态 | 核心技术 |
+|---|---|---|
+| `utils/camera_stream.py` | ✅ 完成 | 多线程摄像头封装，防帧阻塞 |
+| `utils/serial_comm.py` | ✅ 完成 | USB CDC JSON 通信，断线自重连 |
+| `qrcode_barcode/qr_decoder.py` | ✅ 完成 | WeChatQRCode 超分辨率解码 |
+| `color_detection/color_extractor.py` | ✅ 完成 | **LAB色彩空间** + CLAHE 光照补偿 |
+| `color_detection/color_tuner.py` | ✅ 完成 | L/A/B 三通道实时动态调参 GUI |
+| `shape_detection/ring_detector.py` | ✅ 完成 | **纯拓扑检测**（无色彩依赖），RETR_TREE + 圆度 + NMS |
+| `calibration/camera_calibrator.py` | ✅ 完成 | 张正友棋盘格标定 + `remap` 查表极速去畸变 |
+| `calibration/perspective_calibrator.py` | 🚧 规划中 | 四点透视坐标映射（像素→塔吊物理坐标mm） |
+| `main.py` 整合 | 🚧 规划中 | 状态机整合所有视觉模块 |
 
-4. **色彩感知提取 (`color_detection/`) [核心重构]**
-   - 本模块已全面放弃不稳定的 HSV 色彩空间，**彻底重构至 LAB 色彩空间**，数学解耦亮度和色彩。
-   - **`color_extractor.py`**: `L`通道做 CLAHE 光照直方图均衡化，在绝对线性的 `A`、`B`通道做阈值切片，计算量暴降，光照抗干扰性能拉满。
-   - **`color_tuner.py`**: 带有可视化滑动条的实时多通道 LAB 参数调节器，直观易用。
-   - **`offline_image_calibrator.py`**: 离线高精度多静态图像采样标定工具。
-   - **`config/color_config.yaml`**: LAB 阈值配置文件。
+---
 
-### 开发中模块 (In Progress)
+## 🏗️ 视觉处理链路
 
-- **`calibration/` (相机物理畸变标定)**: 下一步计划，通过张正友棋盘格标定法求取内参，提供极速查表映射（`cv2.remap`）消除鱼眼畸变。
-- **`main.py` (主状态机)**: 将零散的模块组合为最终交付的比赛状态机管线。
+```
+摄像头帧
+   │
+   ▼
+┌──────────────────────────┐
+│ Undistorter (remap 查表)  │  ← camera_params.npz（标定后生成）
+│ 去鱼眼畸变，与位置无关    │
+└──────────────────────────┘
+   │
+   ├─ 任务1: 颜色物料识别
+   │   └─ BGR→LAB + CLAHE(L) → inRange(A,B) → 最大色块质心
+   │
+   └─ 任务2: 圆环目标定位
+       └─ 灰度 → 自适应二值化 → RETR_TREE → 圆度过滤 → NMS → 环心坐标
+```
 
-## 环境依赖
+---
 
-*   Python 3.x
-*   OpenCV (`opencv-python`)
-*   NumPy
-*   PyYAML
-*   pyzbar
+## 🚀 快速开始
 
-## 开发维护
-DeepMind Antigravity AI Assistant & FahuWWWWWWW
+### 环境依赖
+
+```bash
+pip install -r requirements.txt
+# ARM端额外需要:
+sudo apt install libzbar0
+```
+
+### 颜色阈值标定（LAB 空间）
+
+```bash
+python color_detection/color_tuner.py
+# 拖动 L/A/B 滑动条，按 's' 保存，按 'n' 添加新颜色
+```
+
+### 圆环检测调参
+
+```bash
+python test_ring_detector.py
+# 拖动 Block Size / C Value / Min Area / Min Circ 滑动条实时调优
+```
+
+### 相机畸变标定
+
+```bash
+python calibration/camera_calibrator.py
+# 拿棋盘格在摄像头前移动，按 's' 抓拍，按 'c' 计算，RMS < 0.5 即为优秀标定
+```
+
+---
+
+## 📚 文档
+
+- [项目开发计划](docs/项目开发计划.md) — 模块详细说明与进度规划
+- [相机标定指南](docs/相机标定开发与测试指南.md) — 标定原理、FAQ、后期优化路线
+
+---
+
+## 🔧 开发维护
+
+`FahuWWWWWWW` & DeepMind Antigravity AI Assistant
