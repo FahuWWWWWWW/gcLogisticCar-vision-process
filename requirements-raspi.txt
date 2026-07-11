@@ -1,0 +1,15 @@
+# Raspberry Pi 专用 Python 依赖
+# OpenCV 和 NumPy 由系统 apt 提供，不在 pip 中重复安装
+# 安装方式：source ~/gc_vision_venv/bin/activate && pip install -r requirements-raspi.txt
+
+PyYAML>=6.0
+pyzbar>=0.1.9
+pyserial>=3.5
+
+# 可选：OCR 引擎（二选一）
+# easyocr>=1.7      # 推荐，支持多语言+数字，首次运行自动下载模型 (~100MB)
+# pytesseract>=0.3  # 轻量备选，需先 sudo apt install tesseract-ocr
+
+# 可选：用于 headless_verify.py 生成测试二维码
+# qrcode>=7.4
+# pillow>=10.0

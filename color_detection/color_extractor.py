@@ -80,3 +80,75 @@ class RobustColorExtractor:
             return max_contour, (cx, cy)
             
         return max_contour, None
+
+    def extract_fallback(self, image, lower_lab, upper_lab, fallback_ratio=0.15):
+        """
+        LAB 距离投票 fallback 策略。
+        当标准 inRange 阈值法找不到目标时（例如物料批次色差），
+        用欧氏距离在 LAB 空间做软投票，取距离 LAB 中心最近的 top-N% 像素。
+
+        :param image: 原始 BGR 图像
+        :param lower_lab: 阈值下限 [L, A, B]
+        :param upper_lab: 阈值上限 [L, A, B]
+        :param fallback_ratio: 选取的像素比例（默认 15%）
+        :return: (mask, lab_img) 或 (None, None)
+        """
+        lab_img = self.preprocess(image)
+
+        # 计算 LAB 中心（阈值范围的中点）
+        lab_center = np.array([
+            (lower_lab[0] + upper_lab[0]) / 2.0,
+            (lower_lab[1] + upper_lab[1]) / 2.0,
+            (lower_lab[2] + upper_lab[2]) / 2.0
+        ], dtype=np.float32)
+
+        # 计算每个像素到 LAB 中心的欧氏距离
+        lab_float = lab_img.astype(np.float32)
+        diff = lab_float - lab_center.reshape(1, 1, 3)
+        distances = np.sqrt(np.sum(diff ** 2, axis=2))
+
+        # 按距离排序，取最近的 top-N% 像素
+        h, w = distances.shape
+        flat_dist = distances.flatten()
+        threshold_idx = int(len(flat_dist) * fallback_ratio)
+        if threshold_idx == 0:
+            return None, lab_img
+
+        # 使用 np.partition 避免全排序（O(n) vs O(n log n)）
+        threshold_val = np.partition(flat_dist, threshold_idx)[threshold_idx]
+        threshold_val = max(threshold_val, 1.0)  # 至少留 1 像素
+
+        mask = (distances <= threshold_val).astype(np.uint8) * 255
+        mask = mask.astype(np.uint8)
+
+        # 形态学滤波
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel)
+
+        return mask, lab_img
+
+    def extract_robust(self, image, lower_lab, upper_lab, fallback_ratio=0.15):
+        """
+        鲁棒颜色提取：先尝试标准 inRange 阈值法，失败时自动回退到距离投票法。
+        这是比赛推荐的主入口。
+
+        :return: (mask, lab_img, method_used)
+                 method_used: "inRange" | "fallback" | "none"
+        """
+        # 先尝试标准 inRange
+        mask, lab_img = self.extract(image, lower_lab, upper_lab)
+        if mask is not None:
+            white_ratio = np.sum(mask == 255) / mask.size
+            if white_ratio > 0.001:  # 至少有 0.1% 的像素命中
+                return mask, lab_img, "inRange"
+
+        # inRange 失败，尝试 fallback
+        from utils.logger import logger
+        logger.info("inRange 阈值法未找到目标，尝试 LAB 距离投票 fallback...")
+        mask_fb, lab_img_fb = self.extract_fallback(image, lower_lab, upper_lab, fallback_ratio)
+        if mask_fb is not None:
+            white_ratio = np.sum(mask_fb == 255) / mask_fb.size
+            if white_ratio > 0.001:
+                return mask_fb, lab_img_fb or lab_img, "fallback"
+
+        return mask, lab_img, "none"

@@ -32,3 +32,6 @@ class Timer:
         elapsed = time.perf_counter() - self.start_time
         # 这里可以选择是否直接打印，或者仅记录
         # print(f"[{self.name}] 耗时: {elapsed*1000:.2f} ms")
+
+# 兼容别名
+CodeTimer = Timer
