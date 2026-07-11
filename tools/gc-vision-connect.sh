@@ -22,9 +22,10 @@ PI_VENV="${GC_VENV:-~/gc_vision_venv}"      # Pi 上虚拟环境路径
 LOCAL_PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"  # 本地项目根目录
 
 # ── 颜色输出 ─────────────────────────────────────────────
-RED='\033[0;31m';    GREEN='\033[0;32m';    YELLOW='\033[1;33m'
-BLUE='\033[0;34m';   CYAN='\033[0;36m';     BOLD='\033[1m'
-NC='\033[0m'         # No Color
+# 使用 $'...' 语法确保 \033 被解释为真正的 ESC 字符
+RED=$'\033[0;31m';    GREEN=$'\033[0;32m';    YELLOW=$'\033[1;33m'
+BLUE=$'\033[0;34m';   CYAN=$'\033[0;36m';     BOLD=$'\033[1m'
+NC=$'\033[0m'         # No Color
 
 pass() { echo -e "  ${GREEN}✓${NC} $1"; }
 fail() { echo -e "  ${RED}✗${NC} $1"; }
