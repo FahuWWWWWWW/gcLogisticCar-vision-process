@@ -61,7 +61,7 @@ def main():
 
     # OpenCV 中 src=0 通常是笔记本自带摄像头，src=1 或 src=2 是外接 USB 摄像头
     # 如果打不开外接摄像头，请尝试将其改为 0 或 2
-    camera = CameraStream(src=1, width=640, height=480).start()
+    camera = CameraStream(src=0, width=640, height=480).start()
     extractor = RobustColorExtractor(use_clahe=True)
 
     print("\n============== 操作指南 ==============")

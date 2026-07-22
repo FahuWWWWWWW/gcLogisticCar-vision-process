@@ -24,19 +24,22 @@ class SerialManager:
         self.callbacks = {}  # 存放帧类型对应的回调函数
 
     def connect(self):
-        """连接串口并启动接收线程"""
-        try:
-            self.serial_port = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
-            self.is_connected = True
-            logger.info(f"串口已连接: {self.port} (波特率 {self.baudrate})")
-            
-            # 启动后台读取线程
-            self.is_reading = True
-            self.read_thread = threading.Thread(target=self._read_loop, daemon=True)
+        """尝试连接串口并启动后台守护/重连线程"""
+        self.is_reading = True
+        
+        # 仅在后台守护线程不存在或未存活时启动
+        if self.read_thread is None or not self.read_thread.is_alive():
+            self.read_thread = threading.Thread(target=self._connection_monitor_loop, daemon=True)
             self.read_thread.start()
+        
+        try:
+            if self.serial_port is None or not self.serial_port.is_open:
+                self.serial_port = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
+                self.is_connected = True
+                logger.info(f"串口已连接: {self.port} (波特率 {self.baudrate})")
             return True
         except serial.SerialException as e:
-            logger.error(f"串口连接失败: {e}")
+            logger.error(f"初始串口连接失败: {e} (将自动在后台重试)")
             self.is_connected = False
             return False
 
@@ -52,10 +55,22 @@ class SerialManager:
         """注册针对某种类型帧的接收回调"""
         self.callbacks[frame_type] = callback_func
 
-    def _read_loop(self):
-        """后台死循环读取串口数据"""
+    def _connection_monitor_loop(self):
+        """后台死循环监控连接状态并读取串口数据，包含自动重连逻辑"""
         buffer = ""
-        while self.is_reading and self.is_connected:
+        while self.is_reading:
+            if not self.is_connected or self.serial_port is None or not self.serial_port.is_open:
+                try:
+                    if self.serial_port:
+                        self.serial_port.close()
+                    self.serial_port = serial.Serial(self.port, self.baudrate, timeout=self.timeout)
+                    self.is_connected = True
+                    logger.info(f"串口恢复连接: {self.port}")
+                    buffer = ""
+                except serial.SerialException:
+                    time.sleep(1) # 每秒重试一次
+                    continue
+                    
             try:
                 if self.serial_port.in_waiting > 0:
                     raw_data = self.serial_port.read(self.serial_port.in_waiting).decode('utf-8', errors='ignore')
@@ -70,9 +85,11 @@ class SerialManager:
                 else:
                     time.sleep(0.005)
             except Exception as e:
-                logger.error(f"串口读取异常: {e}")
+                logger.error(f"串口连接异常断开: {e}")
                 self.is_connected = False
-                break
+                if self.serial_port:
+                    self.serial_port.close()
+                time.sleep(1)
 
     def _parse_frame(self, raw_str):
         """解析接收到的 JSON 协议帧并触发回调"""
@@ -111,7 +128,8 @@ class SerialManager:
         try:
             frame_str = json.dumps(frame) + '\n'
             self.serial_port.write(frame_str.encode('utf-8'))
-            logger.debug(f"TX: {frame_str.strip()}")
+            self.serial_port.flush()
+            logger.debug(f"TX (sent over serial): {frame_str.strip()}")
             return True
         except Exception as e:
             logger.error(f"发送帧失败: {e}")

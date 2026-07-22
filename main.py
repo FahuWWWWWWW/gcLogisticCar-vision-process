@@ -81,8 +81,8 @@ def main():
         frame_type = frame.get("type")
         
         # 仅放行视觉状态机真正关心的指令，过滤掉 POSE/STATUS 等高频上报，防止阻塞队列
-        if frame_type in ["QR_READ", "FIND_BLOCK", "FIND_RING"]:
-            logger.info(f"收到下位机任务指令: {frame_type}, 参数: {frame.get('data')}")
+        if frame_type in ["QR_READ", "FIND_BLOCK", "FIND_RING", "QR_RESULT"]:
+            logger.debug(f"收到下位机任务指令: {frame_type}, 参数: {frame.get('data')}")
             task_queue.put(frame)
         else:
             # 忽略未知或非视觉任务报文，防止塞满数据流水线
@@ -109,11 +109,9 @@ def main():
     
     try:
         while True:
-            # --- 0. 串口健康检查与自动重连 ---
+            # --- 0. 串口状态监控 ---
             if not sm.is_connected and time.time() - last_reconnect_attempt > SERIAL_RECONNECT_INTERVAL:
-                logger.warning("串口已断开，尝试重连...")
-                if sm.connect():
-                    logger.info("串口重连成功！")
+                logger.warning("串口当前处于断开状态，后台线程正在尝试重连...")
                 last_reconnect_attempt = time.time()
             
             ret, frame = camera.read()
@@ -124,15 +122,22 @@ def main():
             # --- 1. 底层硬件级加速去畸变 ---
             # 这步是必须的，外参透视标定和圆环检测必须基于“平坦”的世界
             frame = undistorter.undistort(frame)
-            display = frame.copy()
+            display = frame.copy() if not HEADLESS else None
             
             # --- 2. 检查是否有中断任务排队 ---
             if not task_queue.empty():
-                cmd_frame = task_queue.get()
-                current_task = cmd_frame.get("type")
-                task_data = cmd_frame.get("data", {})
-                task_start_time = time.time()
-                logger.info(f"==> 状态机切换为: {current_task}")
+                # 【优化】排空队列，只取最新的一条指令，彻底杜绝任何堆积延迟
+                while not task_queue.empty():
+                    cmd_frame = task_queue.get()
+                
+                # 只有当任务发生实质性变化时才打印日志，避免高频请求刷屏
+                if current_task != cmd_frame.get("type") or task_data != cmd_frame.get("data", {}):
+                    current_task = cmd_frame.get("type")
+                    task_data = cmd_frame.get("data", {})
+                    task_start_time = time.time()
+                    logger.info(f"==> 状态机切换为: {current_task}, 数据: {task_data}")
+                else:
+                    task_start_time = time.time() # 仅刷新超时时间
             
             # --- 2b. 任务超时检查（5 秒未找到目标则发 ERROR 帧，防止下位机无限等待）---
             if current_task and (time.time() - task_start_time) > TASK_TIMEOUT:
@@ -143,17 +148,18 @@ def main():
                 
             # --- 3. 状态机路由与视觉算子执行 ---
             
-            # 状态 1：扫码
+            # 状态 1：旧的扫码触发请求 (废弃，现改由下位机主动推送 QR_RESULT)
             if current_task == "QR_READ":
-                res, points = qr_decoder.decode(frame)
-                if res:
-                    target_str = res[0]
-                    logger.info(f"扫码成功: {target_str}")
-                    if sm.is_connected:
-                        sm.send_frame("QR_RESULT", {"data": target_str})
-                    if DEBUG_SAVE:
-                        _debug_save(display, None, "qr", "success")
-                    current_task = None
+                logger.warning("收到 QR_READ，但由于已转交单片机处理，该指令被忽略")
+                current_task = None
+                
+            # 状态 1.5：接收下位机解析出的二维码任务
+            elif current_task == "QR_RESULT":
+                # 因为下位机通过 T7 模块用 snprintf 发送的是 {"code":"123+456"}
+                task_code_str = task_data.get("code", "")
+                logger.info(f"==========> 接收到下位机同步的真实任务码: {task_code_str} <==========")
+                # 可在此处增加屏幕 UI 更新或其他业务逻辑
+                current_task = None
                     
             # 状态 2：寻找色块
             elif current_task == "FIND_BLOCK":
@@ -165,18 +171,44 @@ def main():
                     contour, center = color_extractor.find_largest_color_blob(mask)
                     
                     if center:
-                        cv2.drawMarker(display, center, (0, 255, 0), cv2.MARKER_CROSS, 20, 2)
-                        cv2.putText(display, f"Target {target_color}", (center[0]-30, center[1]-30), 
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+                        if not HEADLESS:
+                            cv2.drawMarker(display, center, (0, 255, 0), cv2.MARKER_CROSS, 20, 2)
+                            cv2.putText(display, f"Target {target_color}", (center[0]-30, center[1]-30), 
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
                         
-                        phys_coords = mapper.pixel_to_physical(center[0], center[1])
-                        if phys_coords:
-                            logger.info(f"找到物料 [{target_color}], 物理坐标: X={phys_coords[0]}, Y={phys_coords[1]}")
+                        # ---- 模式分支：offset vs 世界坐标 vs 像素坐标 ----
+                        if task_data.get("mode") == "offset":
+                            # 【新增】机械臂偏移模式：返回像素→mm 相对偏移
+                            # 标定参数：画面中心像素 + mm/pixel 映射系数
+                            CAM_CX = 320.0   # 640×480 画面中心 X
+                            CAM_CY = 240.0   # 画面中心 Y
+                            SCALE_X = 0.27   # mm/pixel（需在机械臂工作距离处标定）
+                            SCALE_Y = 0.27   # mm/pixel
+                            
+                            px_offset = center[0] - CAM_CX
+                            py_offset = center[1] - CAM_CY
+                            dx_mm = round(px_offset * SCALE_X, 1)
+                            dy_mm = round(py_offset * SCALE_Y, 1)
+                            
+                            logger.info(f"找到物料 [{target_color}], 偏移: dx={dx_mm}mm, dy={dy_mm}mm")
                             if sm.is_connected:
-                                sm.send_frame("COORD_RESULT", {"x": phys_coords[0], "y": phys_coords[1]})
-                            if DEBUG_SAVE:
-                                _debug_save(display, mask, "block", target_color)
-                            current_task = None
+                                sm.send_frame("ARM_OFFSET", {"dx_mm": dx_mm, "dy_mm": dy_mm, "found": True})
+                        elif task_data.get("mode") == "pixel":
+                            # 【新增】像素模式：返回纯像素坐标供 STM32 进行 IBVS 视觉伺服对准
+                            # [优化] 去掉这里的 logger.info 打印，因为 IBVS 模式下单片机每秒请求数十次，打印会严重拖慢树莓派性能
+                            if sm.is_connected:
+                                sm.send_frame("COORD_RESULT", {"x": center[0], "y": center[1]})
+                        else:
+                            # 【原有】世界坐标模式：透视变换 → 物理坐标 (mm)
+                            phys_coords = mapper.pixel_to_physical(center[0], center[1])
+                            if phys_coords:
+                                logger.info(f"找到物料 [{target_color}], 物理坐标: X={phys_coords[0]}, Y={phys_coords[1]}")
+                                if sm.is_connected:
+                                    sm.send_frame("COORD_RESULT", {"x": phys_coords[0], "y": phys_coords[1]})
+                        
+                        if DEBUG_SAVE:
+                            _debug_save(display, mask, "block", target_color)
+                        current_task = None
                     elif DEBUG_SAVE:
                         _debug_save(display, mask, "block_miss", target_color)
                 else:
@@ -184,38 +216,97 @@ def main():
                     if sm.is_connected:
                         sm.send_frame("ERROR", {"msg": "config_missing", "color": target_color})
                     current_task = None
-                    
             # 状态 3：找放置点圆环
             elif current_task == "FIND_RING":
                 rings, mask = ring_detector.detect(frame)
                 if rings:
-                    best_ring = rings[0]
+                    # 按 X 坐标从小到大排序，物理上对应 左→中→右
+                    rings_sorted = sorted(rings, key=lambda r: r["center"][0])
+                    
+                    # 标注每个圆环的位置序号和类型
+                    LABELS = ["L", "C", "R"]  # 最多标注3个
+                    for idx, r in enumerate(rings_sorted):
+                        rcx, rcy = r["center"]
+                        if not HEADLESS:
+                            lbl = LABELS[idx] if idx < len(LABELS) else str(idx)
+                            partial_tag = "(P)" if r.get("is_partial") else ""
+                            cv2.putText(display, f"{lbl}{partial_tag}", (rcx - 10, rcy + r["radius"] + 20),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 0), 2)
+                    
+                    # 选取中心圆环：X 坐标最靠近画面中心 (320) 的那个
+                    CAM_IMAGE_CENTER_X = 320
+                    best_ring = min(rings_sorted, key=lambda r: abs(r["center"][0] - CAM_IMAGE_CENTER_X))
                     cx, cy = best_ring["center"]
                     
-                    cv2.drawMarker(display, (cx, cy), (0, 0, 255), cv2.MARKER_CROSS, 20, 2)
-                    cv2.circle(display, (cx, cy), best_ring["radius"], (0, 0, 255), 2)
-                    cv2.putText(display, "Target Ring", (cx-30, cy-30), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                    # 绘制选定的目标圆环（红色大十字）
+                    if not HEADLESS:
+                        cv2.drawMarker(display, (cx, cy), (0, 0, 255), cv2.MARKER_CROSS, 20, 2)
+                        cv2.putText(display, "TARGET", (cx - 30, cy - 30), 
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                     
-                    phys_coords = mapper.pixel_to_physical(cx, cy)
-                    if phys_coords:
-                        logger.info(f"找到放置点圆环, 物理坐标: X={phys_coords[0]}, Y={phys_coords[1]}")
+                    if task_data.get("mode") == "pixel":
+                        # 返回纯像素坐标（一次性请求，发完就清空任务）
                         if sm.is_connected:
-                            sm.send_frame("COORD_RESULT", {"x": phys_coords[0], "y": phys_coords[1]})
+                            sm.send_frame("COORD_RESULT", {"x": cx, "y": cy})
+                        current_task = None  # 防止每帧重复发送将串口刷爆
+                    elif task_data.get("mode") == "offset":
+                        # 返回相对中心的物理毫米偏移量供多次位置环使用
+                        CAM_CX = 318.0   # 针对圆环的标定中心 X
+                        CAM_CY = 226.0   # 针对圆环的标定中心 Y
+                        SCALE_X = 0.27   # mm/pixel
+                        SCALE_Y = 0.27   # mm/pixel
+                        
+                        px_offset = cx - CAM_CX
+                        py_offset = cy - CAM_CY
+                        dx_mm = round(px_offset * SCALE_X, 1)
+                        dy_mm = round(py_offset * SCALE_Y, 1)
+                        
+                        # 构建所有圆环的坐标列表
+                        all_ring_coords = []
+                        for r in rings_sorted:
+                            rx, ry = r["center"]
+                            all_ring_coords.append({
+                                "x": rx, "y": ry,
+                                "partial": r.get("is_partial", False)
+                            })
+                        
+                        logger.info(f"找到 {len(rings)} 个圆环 (含截断), 中心环偏移: dx={dx_mm}mm, dy={dy_mm}mm")
+                        if sm.is_connected:
+                            sm.send_frame("ARM_OFFSET", {
+                                "dx_mm": dx_mm, "dy_mm": dy_mm, "found": True,
+                                "ring_count": len(rings),
+                                "rings": all_ring_coords
+                            })
+                        current_task = None # 离散请求必须清除任务，否则会死循环无限发！
+                    else:
+                        phys_coords = mapper.pixel_to_physical(cx, cy)
+                        if phys_coords:
+                            logger.info(f"找到放置点圆环, 物理坐标: X={phys_coords[0]}, Y={phys_coords[1]}")
+                            if sm.is_connected:
+                                sm.send_frame("COORD_RESULT", {"x": phys_coords[0], "y": phys_coords[1]})
                         if DEBUG_SAVE:
                             _debug_save(display, mask, "ring", "found")
                         current_task = None
-                elif DEBUG_SAVE:
-                    _debug_save(display, mask, "ring_miss", "search")
+                else:
+                    # [FIX] 未找到圆环时主动回复 found=false，让 MCU 立即得知无目标
+                    # 不再沉默等待 5s 任务超时，每帧都即时通知，MCU 侧可快速递增 miss_streak
+                    if task_data.get("mode") == "offset" and sm.is_connected:
+                        sm.send_frame("ARM_OFFSET", {"dx_mm": 0.0, "dy_mm": 0.0, "found": False})
+                    if DEBUG_SAVE:
+                        _debug_save(display, mask, "ring_miss", "search")
+                    
+                # 每30帧打印一次提示，防止用户以为程序卡死
+                if not rings and getattr(ring_detector, '_search_frames', 0) % 30 == 0:
+                    logger.info("FIND_RING: 正在寻找圆环，但画面中未检测到符合条件的特征...")
+
+
 
             # --- 4. 实时显示与系统状态监控 ---
-            fps_counter.update()
-            fps = fps_counter.get_fps()
-            
-            status_text = f"State: {current_task if current_task else 'IDLE'}"
-            color = (0, 0, 255) if current_task else (0, 255, 0)
-            
             if not HEADLESS:
+                fps_counter.update()
+                fps = fps_counter.get_fps()
+                status_text = f"State: {current_task if current_task else 'IDLE'}"
+                color = (0, 0, 255) if current_task else (0, 255, 0)
                 cv2.putText(display, f"FPS: {fps:.1f} | {status_text}", (10, 30), 
                             cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
                 cv2.imshow("gcLogisticCar - Main FSM", display)
@@ -246,7 +337,9 @@ def main():
                     logger.info(">> 打桩测试：模拟下发紧急停止 (EMERGENCY_STOP)")
                     if sm.is_connected:
                         sm.send_frame("EMERGENCY_STOP", {})
-            # HEADLESS 模式：仍可通过 Ctrl+C 安全退出
+            else:
+                # HEADLESS 模式下通过睡眠避免 CPU 空转
+                time.sleep(0.01)
 
     except KeyboardInterrupt:
         logger.info("用户中断运行。")

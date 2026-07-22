@@ -1,5 +1,5 @@
 # 串口通信配置
-port: "COM3"  # Windows 下通常为 COMx，Linux/树莓派下通常为 /dev/ttyUSB0 或 /dev/ttyACM0
+port: "/dev/ttyACM0"  # 树莓派/Linux 格式; Windows 调试时改为 COM3
 baudrate: 115200
 timeout: 0.1
 
