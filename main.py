@@ -81,7 +81,7 @@ def main():
         frame_type = frame.get("type")
         
         # 仅放行视觉状态机真正关心的指令，过滤掉 POSE/STATUS 等高频上报，防止阻塞队列
-        if frame_type in ["QR_READ", "FIND_BLOCK", "FIND_RING", "QR_RESULT"]:
+        if frame_type in ["QR_READ", "FIND_BLOCK", "FIND_RING", "QR_RESULT", "IDENTIFY_COLOR"]:
             logger.debug(f"收到下位机任务指令: {frame_type}, 参数: {frame.get('data')}")
             task_queue.put(frame)
         else:
@@ -216,6 +216,36 @@ def main():
                     if sm.is_connected:
                         sm.send_frame("ERROR", {"msg": "config_missing", "color": target_color})
                     current_task = None
+
+            # 状态 2.5：特定位置颜色识别 (用于决赛扫视)
+            elif current_task == "IDENTIFY_COLOR":
+                best_color = "unknown"
+                best_area = 0
+                CAM_IMAGE_CENTER_X = 320
+                
+                # 遍历红绿蓝，寻找视野中心面积最大的色块
+                for color_name in ["red", "green", "blue"]:
+                    cfg = color_cfg.get(color_name + "_cube")
+                    if cfg:
+                        mask, _ = color_extractor.extract(frame, cfg["lower"], cfg["upper"])
+                        contour, center = color_extractor.find_largest_color_blob(mask)
+                        if center and contour is not None:
+                            area = cv2.contourArea(contour)
+                            # 必须在视野中心附近 (比如中心 X 坐标正负 120 像素内)
+                            if abs(center[0] - CAM_IMAGE_CENTER_X) < 120 and area > best_area:
+                                best_area = area
+                                best_color = color_name
+                
+                logger.info(f"扫视颜色识别完成: {best_color} (面积: {best_area})")
+                
+                if not HEADLESS:
+                    cv2.putText(display, f"ID_COLOR: {best_color.upper()}", (200, 400), 
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 0, 255), 3)
+
+                if sm.is_connected:
+                    sm.send_frame("COLOR_RESULT", {"color": best_color})
+                current_task = None
+                
             # 状态 3：找放置点圆环
             elif current_task == "FIND_RING":
                 rings, mask = ring_detector.detect(frame)

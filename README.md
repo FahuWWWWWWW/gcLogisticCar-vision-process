@@ -2,7 +2,7 @@
 
 > **2027工程实践创新能力大赛（智能搬运赛道）— 轻量级高鲁棒性机器视觉处理管线**
 >
-> 面向树莓派 4B / RK3566 ARM 平台，全程使用经典 OpenCV 方案，拒绝推理高延迟。
+> 面向树莓派 4B/5，全程使用经典 OpenCV 方案。LAB 颜色 + 拓扑圆环 + 二维码解码，无需深度学习协处理器。
 
 ---
 
@@ -95,6 +95,96 @@ python calibration/camera_calibrator.py
 
 - [项目开发计划](docs/项目开发计划.md) — 模块详细说明与进度规划
 - [相机标定指南](docs/相机标定开发与测试指南.md) — 标定原理、FAQ、后期优化路线
+- [硬件选型与视觉升级分析](硬件选型与视觉升级分析.md) — 2026-07 全面评估：不需要换主控/加协处理器
+
+---
+
+## 📦 完整文件清单
+
+```
+Vision/
+├── main.py                          ★ FSM 状态机主循环
+├── README.md                        本文档
+├── 硬件选型与视觉升级分析.md         硬件选型与升级路线分析
+├── 智能物流搬运赛项_备赛指南.md      赛规速查
+│
+├── requirements.txt                 PC 端 Python 依赖
+├── requirements-raspi.txt           树莓派端依赖
+│
+├── config/
+│   ├── serial_config.yaml           串口配置
+│   ├── color_config.yaml            LAB 颜色阈值(6色)
+│   └── camera_params.npz            相机内参标定结果
+│
+├── utils/                           工具库
+│   ├── logger.py                    标准化日志
+│   ├── timer.py                     FPSCounter 帧率统计
+│   ├── camera_stream.py             多线程摄像头流
+│   ├── serial_comm.py               JSON 串口通信(自动重连)
+│   ├── debug_saver.py               DEBUG 图像保存
+│   └── nori_awb.py                  Nori 相机白平衡锁定
+│
+├── color_detection/                 颜色识别
+│   ├── color_extractor.py           LAB+CLAHE 颜色提取(fallback)
+│   ├── color_tuner.py               实时 LAB 滑动条调参 GUI
+│   ├── capture_images.py            图像采集
+│   └── offline_image_calibrator.py  离线标定
+│
+├── shape_detection/                 形状检测
+│   └── ring_detector.py             拓扑层级+椭圆拟合+NMS
+├── test_ring_detector.py            圆环检测实时调参
+│
+├── qrcode_barcode/                  二维码解码
+│   └── qr_decoder.py                WeChatQRCode CNN + pyzbar
+│
+├── ocr_recognition/                 OCR 文字识别
+│   └── ocr_engine.py                EasyOCR/Tesseract 双后端
+│
+├── calibration/                     标定管线
+│   ├── camera_calibrator.py         张正友内参标定(remap查表)
+│   ├── perspective_calibrator.py    四点交互外参透视变换
+│   └── detect_checkerboard_size.py  棋盘格检测
+│
+├── models/                          模型文件
+│   └── wechat_qrcode/               WeChatQRCode 4个Caffe模型
+│
+├── tests/                           测试
+│   ├── integration_benchmark.py     端到端性能基准
+│   ├── headless_verify.py           无头模式验证
+│   └── test_serial_link.py          串口链路测试
+│
+├── scripts/                         运维脚本
+│   ├── setup_ssh.py                 SSH 免密配置
+│   └── ssh_test.py                  SSH 连接测试
+│
+├── tools/                           辅助工具
+│   ├── quick_calibrate.py           快速标定
+│   ├── gc-vision-connect.sh         Linux SSH 连接
+│   └── gc-vision-connect.bat        Windows SSH 连接
+│
+├── docs/                            文档
+│   ├── 项目开发计划.md
+│   ├── 树莓派部署与运行指南.md
+│   ├── 相机标定开发与测试指南.md
+│   └── 上下位机串口通信与测试指南.md
+│
+├── content_of_competition/          赛题原文
+│   ├── 2027智能+命题.pdf
+│   └── 2026智能+命题.pdf
+│
+├── object_detection/                目标检测（预留空壳）
+├── pose_estimation/                 位姿估计（预留空壳）
+│
+├── Nori_public_dump.py              Nori 相机公开API
+├── Nori_Xvision_API_dump.py         Nori 相机企业SDK
+├── device_whitebalance_gain_control.cpp  C++ 白平衡控制
+├── nor_public_dump.txt              Nori 命令参考
+├── verify_pi.py                     树莓派环境验证
+├── connect_pi.py                    树莓派发现与连接
+├── scan_ssh.py                      SSH 扫描
+├── json_test.py                     JSON 协议打桩
+└── read_com26.ps1                   Windows 串口读取
+```
 
 ---
 
